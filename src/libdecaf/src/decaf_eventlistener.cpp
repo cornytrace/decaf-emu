@@ -17,7 +17,7 @@ addEventListener(EventListener *listener)
 void
 removeEventListener(EventListener *listener)
 {
-   sEventListeners.erase(std::remove(sEventListeners.begin(), sEventListeners.end(), listener));
+   sEventListeners.erase(std::remove(sEventListeners.begin(), sEventListeners.end(), listener), sEventListeners.end());
 }
 
 namespace event
