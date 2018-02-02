@@ -1,7 +1,17 @@
+#include <QFileDialog>
+#include <QWindow>
 #include <glbinding/Binding.h>
 #include <glbinding/Meta.h>
+
+#include <common\log.h>
+#include <decaf-sdl\decafsdl_opengl.h>
+#include <decaf-sdl\decafsdl_vulkan.h>
+#include <SDL_syswm.h>
+
+#include <decaf-sdl\config.h>
 #include "mainwindow.h"
-#include <QFileDialog>
+
+auto gCliLog = gLog;
 
 MainWindow::MainWindow(QWidget *parent)
    : QMainWindow(parent)
@@ -22,6 +32,143 @@ getPathBasename(const std::string &path)
    }
 }
 
+bool MainWindow::run(const std::string gamePath)
+{
+    auto shouldQuit = false;
+
+    if (!initializeSDL())
+    {
+        return false;
+    }
+
+    //auto debugUiRenderer = mGraphicsDriver->getDecafDebugUiRenderer();
+    //decaf::setDebugUiRenderer(debugUiRenderer);
+
+    // Set input provider
+    decaf::setInputDriver(this);
+    decaf::addEventListener(this);
+    //openInputDevices();
+
+    // Set sound driver
+    //decaf::setSoundDriver(mSoundDriver);
+
+    decaf::setClipboardTextCallbacks(
+        [](void *context) -> const char * {
+        return SDL_GetClipboardText();
+    },
+        [](void *context, const char *text) {
+        SDL_SetClipboardText(text);
+    });
+
+    // Initialise emulator
+    if (!decaf::initialise(gamePath)) {
+        return false;
+    }
+
+    // Start emulator
+    decaf::start();
+    while (!shouldQuit && !decaf::hasExited()) {
+        QCoreApplication::processEvents();
+
+        /*if (mVpad0Controller) {
+            SDL_GameControllerUpdate();
+        }*/
+
+        SDL_Event event;
+
+        while (SDL_PollEvent(&event)) {
+            switch (event.type) {
+            case SDL_WINDOWEVENT:
+                if (event.window.event == SDL_WINDOWEVENT_CLOSE) {
+                    shouldQuit = true;
+                }
+
+                break;
+            case SDL_MOUSEBUTTONDOWN:
+                //decaf::injectMouseButtonInput(translateMouseButton(event.button.button), decaf::input::MouseAction::Press);
+                break;
+            case SDL_MOUSEBUTTONUP:
+                //decaf::injectMouseButtonInput(translateMouseButton(event.button.button), decaf::input::MouseAction::Release);
+                break;
+            case SDL_MOUSEWHEEL:
+                decaf::injectScrollInput(static_cast<float>(event.wheel.x), static_cast<float>(event.wheel.y));
+                break;
+            case SDL_MOUSEMOTION:
+                decaf::injectMousePos(static_cast<float>(event.motion.x), static_cast<float>(event.motion.y));
+                break;
+            case SDL_KEYDOWN:
+                //decaf::injectKeyInput(translateKeyCode(event.key.keysym), decaf::input::KeyboardAction::Press);
+                break;
+            case SDL_KEYUP:
+                if (event.key.keysym.sym == SDLK_TAB) {
+                    //mToggleDRC = !mToggleDRC;
+                }
+
+                if (event.key.keysym.sym == SDLK_ESCAPE) {
+                    shouldQuit = true;
+                }
+
+                //decaf::injectKeyInput(translateKeyCode(event.key.keysym), decaf::input::KeyboardAction::Release);
+                break;
+            case SDL_TEXTINPUT:
+                decaf::injectTextInput(event.text.text);
+                break;
+            case SDL_QUIT:
+                shouldQuit = true;
+                break;
+            }
+        }
+
+        //Viewport tvViewport, drcViewport;
+        //calculateScreenViewports(tvViewport, drcViewport);
+        //mGraphicsDriver->renderFrame(tvViewport, drcViewport);
+    }
+
+    // Shut down decaf
+    decaf::shutdown();
+
+    return true;
+}
+
+bool MainWindow::initializeSDL()
+{
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
+        gLog->error("Failed to initialize SDL: {}", SDL_GetError());
+        return false;
+    }
+
+    if (config::display::backend == "opengl") {
+        mainsdl = new DecafSDLOpenGL();
+        drcsdl = new DecafSDLOpenGL();
+    }
+    else if (config::display::backend == "vulkan") {
+        mainsdl = new DecafSDLVulkan();
+        drcsdl = new DecafSDLVulkan();
+    }
+
+    if (!mainsdl->initialise(1280, 720)) {
+        gLog->error("Failed to create main graphics window");
+        return false;
+    }
+
+    if (!drcsdl->initialise(854, 480)) {
+        gLog->error("Failed to create gamepad graphics window");
+        return false;
+    }
+
+    SDL_SysWMinfo systemInfo;
+    SDL_VERSION(&systemInfo.version);
+    SDL_GetWindowWMInfo(mainsdl->getWindow(), &systemInfo);
+    auto mainhandle = systemInfo.info.win.window;
+    SDL_GetWindowWMInfo(drcsdl->getWindow(), &systemInfo);
+    auto drchandle = systemInfo.info.win.window;
+
+    ui.dockWidgetContents->createWindowContainer(QWindow::fromWinId((WId)mainhandle));
+    ui.dockWidgetDRCContents->createWindowContainer(QWindow::fromWinId((WId)drchandle));
+
+    return true;
+}
+
 void MainWindow::actOpen()
 {
    auto gamePath = QFileDialog::getOpenFileName(this, tr("Open File"), QString(), tr("Wii U Executable (*.rpx)"));
@@ -30,148 +177,17 @@ void MainWindow::actOpen()
       return;
    }
 
-   auto logFile = getPathBasename(gamePath.toStdString());
-   auto logLevel = spdlog::level::info;
-   std::vector<spdlog::sink_ptr> sinks;
-   sinks.push_back(std::make_shared<spdlog::sinks::daily_file_sink_st>(logFile, "txt", 23, 59, true));
-
    // Initialise libdecaf logger
-   decaf::initialiseLogging(sinks, logLevel);
-
-   // Create OpenGL graphics driver
-   mGraphicsDriver = decaf::createGLDriver();
-   decaf::setGraphicsDriver(mGraphicsDriver);
-
-   // Set input provider
-   decaf::setInputDriver(this);
-   decaf::addEventListener(this);
-
-   decaf::setClipboardTextCallbacks(
-      []() -> const char * {
-         return "";
-      },
-      [](const char *text) {
-      });
-
-   // Initialise emulator
-   if (!decaf::initialise(gamePath.toStdString())) {
-      return;
-   }
-
-   decaf::debugger::initialise();
-
-   mGraphicsThread = new GraphicsThread(this, mGraphicsDriver, ui.centralWidget->context());
-   mGraphicsThread->start();
+   auto logFile = getPathBasename(gamePath.toStdString());
+   decaf::initialiseLogging(logFile);
 
    // Start emulator
-   decaf::start();
+   run(gamePath.toStdString());
 }
 
 void MainWindow::actExit()
 {
-}
-
-#include <QOpenGLContext>
-#include <common/log.h>
-static std::string
-getGlDebugSource(gl::GLenum source)
-{
-   switch (source) {
-   default:
-      return glbinding::Meta::getString(source);
-   }
-}
-
-static std::string
-getGlDebugType(gl::GLenum severity)
-{
-   switch (severity) {
-   default:
-      return glbinding::Meta::getString(severity);
-   }
-}
-
-static std::string
-getGlDebugSeverity(gl::GLenum severity)
-{
-   switch (severity) {
-   default:
-      return glbinding::Meta::getString(severity);
-   }
-}
-
-static void GL_APIENTRY
-debugMessageCallback(gl::GLenum source, gl::GLenum type, gl::GLuint id, gl::GLenum severity,
-                     gl::GLsizei length, const gl::GLchar* message, const void *userParam)
-{
-   for (auto filterID : decaf::config::gpu::debug_filters) {
-      if (filterID == id) {
-         return;
-      }
-   }
-
-   auto outputStr = fmt::format("GL Message ({}, {}, {}, {}) {}", id,
-                                getGlDebugSource(source),
-                                getGlDebugType(type),
-                                getGlDebugSeverity(severity),
-                                message);
-
-   if (severity == GL_DEBUG_SEVERITY_HIGH) {
-      gLog->warn(outputStr);
-   } else if (severity == GL_DEBUG_SEVERITY_MEDIUM) {
-      gLog->debug(outputStr);
-   } else if (severity == GL_DEBUG_SEVERITY_LOW) {
-      gLog->trace(outputStr);
-   } else if (severity == GL_DEBUG_SEVERITY_NOTIFICATION) {
-      gLog->info(outputStr);
-   } else {
-      gLog->info(outputStr);
-   }
-}
-
-void
-GraphicsThread::run()
-{
-   // Create GL context
-   QOpenGLContext context;
-   //context.setShareContext(QOpenGLContext::globalShareContext());
-   context.create();
-
-   auto group = context.shareGroup();
-   auto list = group->shares();
-
-   for (auto item : list) {
-      gLog->debug("GraphicsThread Shares: {}", reinterpret_cast<std::uintptr_t>(item));
-   }
-
-   // let's go!
-   context.makeCurrent(mWindowContext->surface());
-   glbinding::Binding::initialize();
-
-   glbinding::setCallbackMaskExcept(glbinding::CallbackMask::After | glbinding::CallbackMask::ParametersAndReturnValue, { "glGetError" });
-   glbinding::setAfterCallback([](const glbinding::FunctionCall &call) {
-      auto error = glbinding::Binding::GetError.directCall();
-
-      if (error != GL_NO_ERROR) {
-         fmt::MemoryWriter writer;
-         writer << call.function->name() << "(";
-
-         for (unsigned i = 0; i < call.parameters.size(); ++i) {
-            writer << call.parameters[i]->asString();
-            if (i < call.parameters.size() - 1)
-               writer << ", ";
-         }
-
-         writer << ")";
-
-         if (call.returnValue) {
-            writer << " -> " << call.returnValue->asString();
-         }
-
-         gLog->error("OpenGL error: {} with {}", glbinding::Meta::getString(error), writer.str());
-      }
-   });
-   mGraphicsDriver->run();
+    close();
 }
 
 // VPAD

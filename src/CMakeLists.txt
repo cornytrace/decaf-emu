@@ -12,3 +12,7 @@ add_subdirectory(decaf-cli)
 if(DECAF_SDL)
     add_subdirectory(decaf-sdl)
 endif()
+
+if(DECAF_QT)
+	add_subdirectory(decaf-qt)
+endif()

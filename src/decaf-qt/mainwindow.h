@@ -1,28 +1,12 @@
 #pragma once
 
 #include "libdecaf/decaf.h"
+#include "decaf-sdl/decafsdl_graphics.h"
 #include <QtWidgets/QMainWindow>
 #include <QThread>
 #include "ui_mainwindow.h"
 
 using namespace decaf::input;
-
-class GraphicsThread : public QThread
-{
-public:
-   GraphicsThread(QObject *parent, decaf::OpenGLDriver *driver, QOpenGLContext *windowContext) :
-      QThread(parent),
-      mGraphicsDriver(driver),
-      mWindowContext(windowContext)
-   {
-   }
-
-   void run() Q_DECL_OVERRIDE;
-
-private:
-   decaf::OpenGLDriver *mGraphicsDriver = nullptr;
-   QOpenGLContext *mWindowContext = nullptr;
-};
 
 class MainWindow : public QMainWindow, public decaf::InputDriver, public decaf::EventListener
 {
@@ -75,7 +59,9 @@ protected slots:
    onGameLoaded(const decaf::GameInfo &info) override;
 
 private:
+   bool run(const std::string gamePath);
+   bool initializeSDL();
    Ui::MainWindowClass ui;
-   GraphicsThread *mGraphicsThread;
-   decaf::OpenGLDriver *mGraphicsDriver = nullptr;
+   DecafSDLGraphics *mainsdl;
+   DecafSDLGraphics *drcsdl;
 };
